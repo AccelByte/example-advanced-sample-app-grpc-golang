@@ -5,6 +5,6 @@
 package server
 
 type GameRules struct {
-	ShipCountMin int `json:"shipCountMin"`
-	ShipCountMax int `json:"shipCountMax"`
+	AllianceRule AllianceRule `json:"alliance" bson:"allianceRule"`
+	CrewType     string       `json:"crewType"`
 }

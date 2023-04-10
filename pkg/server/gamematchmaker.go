@@ -7,6 +7,8 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"github.com/elliotchance/pie/v2"
 	"github.com/sirupsen/logrus"
 	"matchmaking-function-grpc-plugin-server-go/pkg/matchmaker"
@@ -21,6 +23,16 @@ func NewGameMatchmaker() MatchLogic {
 // ValidateTicket returns a bool if the match ticket is valid
 func (g GameMatchMaker) ValidateTicket(matchTicket matchmaker.Ticket, matchRules interface{}) (bool, error) {
 	logrus.Info("GAME MATCHMAKER: validate ticket")
+	rules, ok := matchRules.(GameRules)
+	if !ok {
+		return false, errors.New("invalid rules type for game rules")
+	}
+
+	if len(matchTicket.Players) > rules.AllianceRule.PlayerMaxNumber {
+		return false, errors.New(fmt.Sprintf("too many players on the ticket, max is %d", rules.AllianceRule.PlayerMaxNumber))
+
+	}
+
 	logrus.Info("Ticket Validation successful")
 	return true, nil
 }
@@ -62,6 +74,11 @@ func (g GameMatchMaker) RulesFromJSON(jsonRules string) (interface{}, error) {
 func (g GameMatchMaker) MakeMatches(ticketProvider TicketProvider, matchRules interface{}) <-chan matchmaker.Match {
 	logrus.Info("GAME MATCHMAKER: make matches")
 	results := make(chan matchmaker.Match)
+	rules, ok := matchRules.(GameRules)
+	if !ok {
+		logrus.Error("invalid rules type for game rules")
+		return results
+	}
 	ctx := context.Background()
 	go func() {
 		defer close(results)
@@ -75,7 +92,7 @@ func (g GameMatchMaker) MakeMatches(ticketProvider TicketProvider, matchRules in
 					return
 				}
 				logrus.Infof("GAME MATCHMAKER: got a ticket: %s", ticket.TicketID)
-				unmatchedTickets = buildGame(ticket, unmatchedTickets, results)
+				unmatchedTickets = buildGame(ticket, unmatchedTickets, rules, results)
 			case <-ctx.Done():
 				logrus.Info("GAME MATCHMAKER: CTX Done triggered")
 				return
@@ -85,18 +102,20 @@ func (g GameMatchMaker) MakeMatches(ticketProvider TicketProvider, matchRules in
 	return results
 }
 
-// buildMatch is responsible for building matches from the slice of match tickets and feeding them to the match channel
-func buildGame(ticket matchmaker.Ticket, unmatchedTickets []matchmaker.Ticket, results chan matchmaker.Match) []matchmaker.Ticket {
+// buildGame is responsible for building matches from the slice of match tickets and feeding them to the match channel.
+// Here we are taking the Players from the first 2 unmatched tickets and having them be the Teams matched in the Match.
+// This will build us a 2v2 Match (which is what the Session Template is set for, as well)
+func buildGame(ticket matchmaker.Ticket, unmatchedTickets []matchmaker.Ticket, gameRules GameRules, results chan matchmaker.Match) []matchmaker.Ticket {
 	logrus.Info("GAME MATCHMAKER: seeing if we have enough tickets to match")
 	unmatchedTickets = append(unmatchedTickets, ticket)
-	if len(unmatchedTickets) == 2 {
+	if len(unmatchedTickets) == gameRules.AllianceRule.MaxNumber {
 		logrus.Info("GAME MATCHMAKER: I have enough tickets to match!")
 		teamOneIDs := pie.Map(unmatchedTickets[0].Players, player.ToID)
 		logrus.Infof("TeamOne: %s", teamOneIDs)
 		teamTwoIDs := pie.Map(unmatchedTickets[1].Players, player.ToID)
 		logrus.Infof("TeamTwo: %s", teamTwoIDs)
 		match := matchmaker.Match{
-			Tickets: make([]matchmaker.Ticket, 2),
+			Tickets: make([]matchmaker.Ticket, gameRules.AllianceRule.MaxNumber),
 			Teams: []matchmaker.Team{
 				{UserIDs: teamOneIDs},
 				{UserIDs: teamTwoIDs},

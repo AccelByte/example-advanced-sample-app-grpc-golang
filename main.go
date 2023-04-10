@@ -136,10 +136,6 @@ func main() {
 	}
 
 	// Create gRPC Server
-	s := grpc.NewServer(
-		grpc.ChainUnaryInterceptor(unaryServerInterceptors...),
-		grpc.ChainStreamInterceptor(streamServerInterceptors...),
-	)
 
 	crewServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(unaryServerInterceptors...),
@@ -152,7 +148,8 @@ func main() {
 	)
 
 	// prometheus metrics
-	prometheusGrpc.Register(s)
+	prometheusGrpc.Register(crewServer)
+	prometheusGrpc.Register(gameServer)
 	prometheusGrpc.EnableHandlingTimeHistogram()
 
 	// Create non-global registry.
@@ -202,11 +199,13 @@ func main() {
 	logrus.Infof("adding the grpc reflection.")
 
 	// Enable gRPC Reflection
-	reflection.Register(s)
+	reflection.Register(crewServer)
+	reflection.Register(gameServer)
 	logrus.Infof("gRPC reflection enabled")
 
 	// Enable gRPC Health Check
-	grpc_health_v1.RegisterHealthServer(s, health.NewServer())
+	grpc_health_v1.RegisterHealthServer(crewServer, health.NewServer())
+	grpc_health_v1.RegisterHealthServer(gameServer, health.NewServer())
 	logrus.Printf("gRPC server listening at %v", crewLis.Addr())
 	logrus.Printf("gRPC server listening at %v", gameLis.Addr())
 
@@ -224,8 +223,16 @@ func main() {
 		}
 	}()
 
+	//TODO look at this for tracing
 	logrus.Infof("starting init provider.")
-	tp, err := initProvider(ctx, s)
+	crewTraceProvider, err := initProvider(ctx, crewServer)
+	if err != nil {
+		logrus.Fatalf("failed to initializing the provider. %s", err.Error())
+
+		return
+	}
+
+	gameTraceProvider, err := initProvider(ctx, gameServer)
 	if err != nil {
 		logrus.Fatalf("failed to initializing the provider. %s", err.Error())
 
@@ -234,7 +241,8 @@ func main() {
 
 	// Register our TracerProvider as the global so any imported
 	// instrumentation in the future will default to using it.
-	otel.SetTracerProvider(tp)
+	otel.SetTracerProvider(crewTraceProvider)
+	otel.SetTracerProvider(gameTraceProvider)
 	// Register the B3 propagator globally.
 	p := b3.New()
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
@@ -245,7 +253,10 @@ func main() {
 
 	// Cleanly shutdown and flush telemetry when the application exits.
 	defer func(ctx context.Context) {
-		if err := tp.Shutdown(ctx); err != nil {
+		if err := crewTraceProvider.Shutdown(ctx); err != nil {
+			logrus.Fatal(err)
+		}
+		if err := gameTraceProvider.Shutdown(ctx); err != nil {
 			logrus.Fatal(err)
 		}
 	}(ctx)
