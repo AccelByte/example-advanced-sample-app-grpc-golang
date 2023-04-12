@@ -4,7 +4,6 @@ const crewType = "mercenary"
 
 type CrewRules struct {
 	AllianceRule AllianceRule `json:"alliance" bson:"allianceRule"`
-	QueAsType    string       `json:"queAsType"`
 }
 
 type AllianceRule struct {

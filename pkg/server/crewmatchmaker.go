@@ -15,11 +15,10 @@ import (
 	"matchmaking-function-grpc-plugin-server-go/pkg/player"
 )
 
-/*
-The Crew Matchmaker will create a Crew (which can be thought of as a Party, Team, etc). It will use ValidateTicket() to ensure that only
-1 Player is on the MatchTicket; then add an arbitrary number to the Match Ticket using EnrichTicket(); then make a Crew of 2 Players -- using
-all the Match Tickets given.
-*/
+const (
+	crewKey   = "crewType"
+	crewValue = "mercenary"
+)
 
 // New returns a MatchMaker of the MatchLogic interface
 func NewCrewMatchmaker() MatchLogic {
@@ -39,30 +38,12 @@ func (c CrewMatchMaker) ValidateTicket(matchTicket matchmaker.Ticket, matchRules
 			rules.AllianceRule.PlayerMaxNumber))
 
 	}
-
-	if matchTicket.TicketAttributes["queAsType"] != rules.QueAsType {
-		return false, errors.New(fmt.Sprintf("player on ticket is not a queAsType %s", rules.QueAsType))
-	}
-	logrus.Info("Ticket Validation successful")
 	return true, nil
 }
 
-// EnrichTicket for Crew is responsible for adding logic to the match ticket before match making. Here we are going to add that this crew be a "mercenary" type crew
+// EnrichTicket for Crew is responsible for adding logic to the match ticket before match making.
 func (c CrewMatchMaker) EnrichTicket(matchTicket matchmaker.Ticket, ruleSet interface{}) (ticket matchmaker.Ticket, err error) {
 	logrus.Info("CREW MATCHMAKER: enrich ticket")
-	logrus.Infof("CREW MATCHMAKER: EnrichedTicket Attributes: %+v", matchTicket.TicketAttributes)
-
-	if len(matchTicket.TicketAttributes) == 0 {
-		logrus.Info("CREW MATCHMAKER: ticket attributes are empty, lets add some!")
-		enrichMap := map[string]interface{}{
-			"crewType": "mercenary",
-		}
-		matchTicket.TicketAttributes = enrichMap
-		logrus.Infof("CREW MATCHMAKER: EnrichedTicket Attributes: %+v", matchTicket.TicketAttributes)
-	} else {
-		matchTicket.TicketAttributes["crewType"] = "mercenary"
-		logrus.Infof("CREW MATCHMAKER: EnrichedTicket Attributes: %+v", matchTicket.TicketAttributes)
-	}
 	return matchTicket, nil
 }
 
@@ -115,11 +96,15 @@ func (c CrewMatchMaker) MakeMatches(ticketProvider TicketProvider, matchRules in
 	return results
 }
 
-// buildCrew is responsible for building a crew of Players based on the MatchPool Rules of the MaxNumber of players for a Team.
-// This is driven from the slice of match tickets and then feeds the results to the match channel
+// buildCrew is responsible for building a crew of Players based on the MatchPool Rules of the MaxNumber of players for a Crew (aka Team, Party, etc).
+// This is driven from the slice of match tickets and then feeds the results to the match channel.
+// When a match is found, a map is added to the Match of "crewType":"mercenary"
 func buildCrew(ticket matchmaker.Ticket, unmatchedTickets []matchmaker.Ticket, crewRules CrewRules, results chan matchmaker.Match) []matchmaker.Ticket {
 	logrus.Info("CREW MATCHMAKER: seeing if we have enough tickets to match")
 	unmatchedTickets = append(unmatchedTickets, ticket)
+	enrichMap := map[string]interface{}{
+		crewKey: crewValue,
+	}
 	if len(unmatchedTickets) == crewRules.AllianceRule.MaxNumber {
 		logrus.Info("CREW MATCHMAKER: I have enough tickets to match!")
 		players := append(unmatchedTickets[0].Players, unmatchedTickets[1].Players...)
@@ -130,6 +115,7 @@ func buildCrew(ticket matchmaker.Ticket, unmatchedTickets []matchmaker.Ticket, c
 			Teams: []matchmaker.Team{
 				{UserIDs: playerIDs},
 			},
+			MatchAttributes: enrichMap,
 		}
 		logrus.Infof("Crew Makeup: %s", match.Teams)
 		copy(match.Tickets, unmatchedTickets)

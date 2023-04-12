@@ -20,6 +20,11 @@ func NewGameMatchmaker() MatchLogic {
 	return GameMatchMaker{}
 }
 
+/*
+Check if the players on the ticket are crewType "mercenary"
+Match teams based on max number of GameRules
+*/
+
 // ValidateTicket returns a bool if the match ticket is valid
 func (g GameMatchMaker) ValidateTicket(matchTicket matchmaker.Ticket, matchRules interface{}) (bool, error) {
 	logrus.Info("GAME MATCHMAKER: validate ticket")
@@ -31,6 +36,10 @@ func (g GameMatchMaker) ValidateTicket(matchTicket matchmaker.Ticket, matchRules
 	if len(matchTicket.Players) > rules.AllianceRule.PlayerMaxNumber {
 		return false, errors.New(fmt.Sprintf("too many players on the ticket, max is %d", rules.AllianceRule.PlayerMaxNumber))
 
+	}
+
+	if matchTicket.TicketAttributes[crewKey] != crewValue {
+		return false, errors.New(fmt.Sprintf("ticket invalid as the %s is not %s", crewKey, crewValue))
 	}
 
 	logrus.Info("Ticket Validation successful")
