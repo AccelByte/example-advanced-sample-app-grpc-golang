@@ -53,12 +53,6 @@ func (b MatchMaker) RulesFromJSON(jsonRules string) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	//if ruleSet.ShipCountMin == 0 {
-	//	return nil, fmt.Errorf("ShipCountMin is 0")
-	//}
-	//if ruleSet.ShipCountMax == 0 {
-	//	return nil, fmt.Errorf("ShipCountMax is 0")
-	//}
 
 	return ruleSet, nil
 }
