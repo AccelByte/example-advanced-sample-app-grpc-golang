@@ -57,8 +57,7 @@ const (
 
 var (
 	service  = os.Getenv("OTEL_SERVICE_NAME")
-	crewPort = flag.Int("crewPort", 6566, "The grpc crew server port")
-	gamePort = flag.Int("gamePort", 6567, "The grpc game server port")
+	gamePort = flag.Int("gamePort", 6565, "The grpc game server port")
 	res      = resource.NewWithAttributes(
 		semconv.SchemaURL,
 		semconv.ServiceNameKey.String(service),
@@ -137,18 +136,12 @@ func main() {
 
 	// Create gRPC Server
 
-	crewServer := grpc.NewServer(
-		grpc.ChainUnaryInterceptor(unaryServerInterceptors...),
-		grpc.ChainStreamInterceptor(streamServerInterceptors...),
-	)
-
 	gameServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(unaryServerInterceptors...),
 		grpc.ChainStreamInterceptor(streamServerInterceptors...),
 	)
 
 	// prometheus metrics
-	prometheusGrpc.Register(crewServer)
 	prometheusGrpc.Register(gameServer)
 	prometheusGrpc.EnableHandlingTimeHistogram()
 
@@ -168,26 +161,12 @@ func main() {
 	}()
 	logrus.Printf("prometheus metrics served at :8080/metrics")
 
-	logrus.Infof("listening to grpc port for crew: %d", *crewPort)
-	crewLis, err := net.Listen("tcp", fmt.Sprintf(":%d", *crewPort))
-	if err != nil {
-		logrus.Fatalf("failed to listen: %v", err)
-		return
-	}
-
 	logrus.Infof("listening to grpc port for game: %d", *gamePort)
 	gameLis, err := net.Listen("tcp", fmt.Sprintf(":%d", *gamePort))
 	if err != nil {
 		logrus.Fatalf("failed to listen: %v", err)
 		return
 	}
-
-	//create crew matchmaker
-	crewMM := server.NewCrewMatchmaker()
-	matchfunctiongrpc.RegisterMatchFunctionServer(crewServer, &server.MatchFunctionServer{
-		UnimplementedMatchFunctionServer: matchfunctiongrpc.UnimplementedMatchFunctionServer{},
-		MM:                               crewMM,
-	})
 
 	//create game matchmaker
 	gameMM := server.NewGameMatchmaker()
@@ -199,23 +178,14 @@ func main() {
 	logrus.Infof("adding the grpc reflection.")
 
 	// Enable gRPC Reflection
-	reflection.Register(crewServer)
 	reflection.Register(gameServer)
 	logrus.Infof("gRPC reflection enabled")
 
 	// Enable gRPC Health Check
-	grpc_health_v1.RegisterHealthServer(crewServer, health.NewServer())
 	grpc_health_v1.RegisterHealthServer(gameServer, health.NewServer())
-	logrus.Printf("gRPC server listening at %v", crewLis.Addr())
 	logrus.Printf("gRPC server listening at %v", gameLis.Addr())
 
 	logrus.Infof("listening...")
-	go func() {
-		if err = crewServer.Serve(crewLis); err != nil {
-			logrus.Fatalf("failed to serve: %v", err)
-			return
-		}
-	}()
 	go func() {
 		if err = gameServer.Serve(gameLis); err != nil {
 			logrus.Fatalf("failed to serve: %v", err)
@@ -225,13 +195,6 @@ func main() {
 
 	//TODO look at this for tracing
 	logrus.Infof("starting init provider.")
-	crewTraceProvider, err := initProvider(ctx, crewServer)
-	if err != nil {
-		logrus.Fatalf("failed to initializing the provider. %s", err.Error())
-
-		return
-	}
-
 	gameTraceProvider, err := initProvider(ctx, gameServer)
 	if err != nil {
 		logrus.Fatalf("failed to initializing the provider. %s", err.Error())
@@ -241,7 +204,6 @@ func main() {
 
 	// Register our TracerProvider as the global so any imported
 	// instrumentation in the future will default to using it.
-	otel.SetTracerProvider(crewTraceProvider)
 	otel.SetTracerProvider(gameTraceProvider)
 	// Register the B3 propagator globally.
 	p := b3.New()
@@ -253,9 +215,6 @@ func main() {
 
 	// Cleanly shutdown and flush telemetry when the application exits.
 	defer func(ctx context.Context) {
-		if err := crewTraceProvider.Shutdown(ctx); err != nil {
-			logrus.Fatal(err)
-		}
 		if err := gameTraceProvider.Shutdown(ctx); err != nil {
 			logrus.Fatal(err)
 		}

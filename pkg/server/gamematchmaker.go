@@ -5,14 +5,18 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/elliotchance/pie/v2"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/exp/maps"
+	"golang.org/x/exp/rand"
 	"matchmaking-function-grpc-plugin-server-go/pkg/matchmaker"
 	"matchmaking-function-grpc-plugin-server-go/pkg/player"
+	"math"
+	"sort"
+	"sync"
+	"time"
 )
 
 // New returns a MatchMaker of the MatchLogic interface
@@ -20,10 +24,31 @@ func NewGameMatchmaker() MatchLogic {
 	return GameMatchMaker{}
 }
 
-/*
-Check if the players on the ticket are crewType "mercenary"
-Match teams based on max number of GameRules
-*/
+type queue struct {
+	tickets []matchmaker.Ticket
+	lock    sync.Mutex
+}
+
+func (q *queue) push(ticket matchmaker.Ticket) {
+	q.lock.Lock()
+	defer q.lock.Unlock()
+	q.tickets = append(q.tickets, ticket)
+}
+
+func (q *queue) pop() *matchmaker.Ticket {
+	if len(q.tickets) == 0 {
+		return nil
+	}
+	q.lock.Lock()
+	defer q.lock.Unlock()
+	ticket := q.tickets[0]
+	q.tickets = q.tickets[1:]
+	return &ticket
+}
+
+func newQueue() *queue {
+	return &queue{tickets: make([]matchmaker.Ticket, 0)}
+}
 
 // ValidateTicket returns a bool if the match ticket is valid
 func (g GameMatchMaker) ValidateTicket(matchTicket matchmaker.Ticket, matchRules interface{}) (bool, error) {
@@ -38,8 +63,12 @@ func (g GameMatchMaker) ValidateTicket(matchTicket matchmaker.Ticket, matchRules
 
 	}
 
-	if matchTicket.TicketAttributes[crewKey] != crewValue {
-		return false, errors.New(fmt.Sprintf("ticket invalid as the %s is not %s", crewKey, crewValue))
+	spawnLocation, ok := matchTicket.TicketAttributes["spawnLocation"].(float64)
+	if !ok {
+		return false, errors.New("spawnLocation must be a non-nil float64 value")
+	}
+	if spawnLocation == 0.0 {
+		return false, errors.New("spawnLocation cannot be nil value for a float")
 	}
 
 	logrus.Info("Ticket Validation successful")
@@ -49,15 +78,18 @@ func (g GameMatchMaker) ValidateTicket(matchTicket matchmaker.Ticket, matchRules
 // EnrichTicket is responsible for adding logic to the match ticket before match making
 func (g GameMatchMaker) EnrichTicket(matchTicket matchmaker.Ticket, ruleSet interface{}) (ticket matchmaker.Ticket, err error) {
 	logrus.Info("GAME MATCHMAKER: enrich ticket")
+	rand.Seed(uint64(time.Now().UnixNano()))
+	var num float64
+	enrichMap := map[string]interface{}{}
 	if len(matchTicket.TicketAttributes) == 0 {
 		logrus.Info("GAME MATCHMAKER: ticket attributes are empty, lets add some!")
-		enrichMap := map[string]interface{}{
-			"enrichedNumber": float64(20),
-		}
+		num = float64(rand.Intn(100-0+1) + 0)
+		enrichMap["spawnLocation"] = math.Round(num)
 		matchTicket.TicketAttributes = enrichMap
 		logrus.Infof("EnrichedTicket Attributes: %+v", matchTicket.TicketAttributes)
 	} else {
-		matchTicket.TicketAttributes["gameMMR"] = float64(20)
+		num = float64(rand.Intn(100-0+1) + 0)
+		matchTicket.TicketAttributes["spawnLocation"] = math.Round(num)
 		logrus.Infof("EnrichedTicket Attributes: %+v", matchTicket.TicketAttributes)
 	}
 	return matchTicket, nil
@@ -88,55 +120,90 @@ func (g GameMatchMaker) MakeMatches(ticketProvider TicketProvider, matchRules in
 		logrus.Error("invalid rules type for game rules")
 		return results
 	}
-	ctx := context.Background()
+
 	go func() {
-		defer close(results)
 		var unmatchedTickets []matchmaker.Ticket
-		nextTicket := ticketProvider.GetTickets()
-		for {
-			select {
-			case ticket, ok := <-nextTicket:
-				if !ok {
-					logrus.Info("GAME MATCHMAKER: there are no tickets to create a match with")
-					return
-				}
-				logrus.Infof("GAME MATCHMAKER: got a ticket: %s", ticket.TicketID)
-				unmatchedTickets = buildGame(ticket, unmatchedTickets, rules, results)
-			case <-ctx.Done():
-				logrus.Info("GAME MATCHMAKER: CTX Done triggered")
-				return
-			}
+		tickets := ticketProvider.GetTickets()
+		for ticket := range tickets {
+			unmatchedTickets = append(unmatchedTickets, ticket)
+			logrus.Errorf("TICKET LENGTH: %d", len(unmatchedTickets))
 		}
+		go buildGame(unmatchedTickets, results, rules)
 	}()
+
 	return results
 }
 
-// buildGame is responsible for building matches from the slice of match tickets and feeding them to the match channel.
-// Here we are taking the Players from the first 2 unmatched tickets and having them be the Teams matched in the Match.
-// This will build us a 2v2 Match (which is what the Session Template is set for, as well)
-func buildGame(ticket matchmaker.Ticket, unmatchedTickets []matchmaker.Ticket, gameRules GameRules, results chan matchmaker.Match) []matchmaker.Ticket {
-	logrus.Info("GAME MATCHMAKER: seeing if we have enough tickets to match")
-	unmatchedTickets = append(unmatchedTickets, ticket)
-	if len(unmatchedTickets) == gameRules.AllianceRule.MaxNumber {
-		logrus.Info("GAME MATCHMAKER: I have enough tickets to match!")
-		teamOneIDs := pie.Map(unmatchedTickets[0].Players, player.ToID)
-		logrus.Infof("TeamOne: %s", teamOneIDs)
-		teamTwoIDs := pie.Map(unmatchedTickets[1].Players, player.ToID)
-		logrus.Infof("TeamTwo: %s", teamTwoIDs)
-		match := matchmaker.Match{
-			Tickets: make([]matchmaker.Ticket, gameRules.AllianceRule.MaxNumber),
-			Teams: []matchmaker.Team{
-				{UserIDs: teamOneIDs},
-				{UserIDs: teamTwoIDs},
-			},
+func buildGame(unmatchedTickets []matchmaker.Ticket, results chan matchmaker.Match, gameRules GameRules) {
+	defer close(results)
+	max := gameRules.AllianceRule.PlayerMaxNumber
+	min := gameRules.AllianceRule.PlayerMinNumber
+	buckets := map[int]*queue{}
+	for _, ticket := range unmatchedTickets {
+		bucket, ok := buckets[len(ticket.Players)]
+		if !ok {
+			bucket = newQueue()
+			buckets[len(ticket.Players)] = bucket
 		}
-		copy(match.Tickets, unmatchedTickets)
-		logrus.Infof("Game Makeup: %s", match.Teams)
-		logrus.Info("GAME MATCHMAKER: sending to results channel")
-		results <- match
-		logrus.Info("GAME MATCHMAKER: resetting unmatched tickets")
-		unmatchedTickets = nil
+		bucket.push(ticket)
 	}
-	logrus.Info("GAME MATCHMAKER: not enough tickets to build a match")
-	return unmatchedTickets
+
+	//start outer loop
+	for {
+		rootTicket := nextTicket(buckets, max)
+		if rootTicket == nil {
+			return
+		}
+		remainingPlayerCount := max - len(rootTicket.Players)
+
+		matchedTickets := []matchmaker.Ticket{*rootTicket}
+
+		//start inner loop
+		for {
+			if remainingPlayerCount == 0 {
+				break
+			}
+			otherTicket := nextTicket(buckets, remainingPlayerCount)
+			if otherTicket == nil {
+				if remainingPlayerCount >= min {
+					break
+				}
+				return
+			}
+			matchedTickets = append(matchedTickets, *otherTicket)
+			remainingPlayerCount -= len(otherTicket.Players)
+
+		}
+
+		ffaTeam := mapPlayerIDs(matchedTickets)
+		match := matchmaker.Match{Tickets: matchedTickets,
+			Teams: []matchmaker.Team{{UserIDs: ffaTeam}}}
+		results <- match
+	}
+}
+
+func nextTicket(buckets map[int]*queue, maxPlayerCount int) *matchmaker.Ticket {
+	bucketKeys := maps.Keys(buckets)
+	sort.Ints(bucketKeys)
+
+	for i := len(bucketKeys) - 1; i >= 0; i-- {
+		if bucketKeys[i] > maxPlayerCount {
+			continue
+		}
+		ticket := buckets[bucketKeys[i]].pop()
+		if ticket != nil {
+			return ticket
+		}
+	}
+	return nil
+}
+
+func mapPlayerIDs(tickets []matchmaker.Ticket) []player.ID {
+	playerIDs := []player.ID{}
+	for _, ticket := range tickets {
+		for _, p := range ticket.Players {
+			playerIDs = append(playerIDs, p.PlayerID)
+		}
+	}
+	return playerIDs
 }
