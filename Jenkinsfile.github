@@ -1,5 +1,5 @@
 githubOwner = 'AccelByte'
-githubRepo = 'example-crew-and-game-matchmakers-grpc-golang'
+githubRepo = 'example-advanced-sample-app-grpc-golang'
 githubSsh = 'dhanarab-sdkbuild-ssh'
 
 githubUrl = "git@github.com:${githubOwner}/${githubRepo}.git"
