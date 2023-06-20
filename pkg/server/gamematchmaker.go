@@ -126,7 +126,7 @@ func (g GameMatchMaker) MakeMatches(ticketProvider TicketProvider, matchRules in
 		tickets := ticketProvider.GetTickets()
 		for ticket := range tickets {
 			unmatchedTickets = append(unmatchedTickets, ticket)
-			logrus.Errorf("TICKET LENGTH: %d", len(unmatchedTickets))
+			logrus.Infof("TICKET LENGTH: %d", len(unmatchedTickets))
 		}
 		go buildGame(unmatchedTickets, results, rules)
 	}()
@@ -136,6 +136,7 @@ func (g GameMatchMaker) MakeMatches(ticketProvider TicketProvider, matchRules in
 
 func buildGame(unmatchedTickets []matchmaker.Ticket, results chan matchmaker.Match, gameRules GameRules) {
 	defer close(results)
+	logrus.Info("BUILD GAME")
 	max := gameRules.AllianceRule.PlayerMaxNumber
 	min := gameRules.AllianceRule.PlayerMinNumber
 	buckets := map[int]*queue{}
@@ -155,6 +156,7 @@ func buildGame(unmatchedTickets []matchmaker.Ticket, results chan matchmaker.Mat
 			return
 		}
 		remainingPlayerCount := max - len(rootTicket.Players)
+		logrus.Infof("OUTTER LOOP REMAINING: %d", remainingPlayerCount)
 
 		matchedTickets := []matchmaker.Ticket{*rootTicket}
 
@@ -165,19 +167,20 @@ func buildGame(unmatchedTickets []matchmaker.Ticket, results chan matchmaker.Mat
 			}
 			otherTicket := nextTicket(buckets, remainingPlayerCount)
 			if otherTicket == nil {
-				if remainingPlayerCount >= min {
+				if remainingPlayerCount <= min {
 					break
 				}
 				return
 			}
 			matchedTickets = append(matchedTickets, *otherTicket)
 			remainingPlayerCount -= len(otherTicket.Players)
-
+			logrus.Infof("INNER LOOP REMIAINING: %d", remainingPlayerCount)
 		}
 
 		ffaTeam := mapPlayerIDs(matchedTickets)
 		match := matchmaker.Match{Tickets: matchedTickets,
 			Teams: []matchmaker.Team{{UserIDs: ffaTeam}}}
+		logrus.Infof("MATCH SENT TO RESULTS: %+v", match)
 		results <- match
 	}
 }

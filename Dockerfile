@@ -11,7 +11,8 @@ FROM --platform=$BUILDPLATFORM golang:1.18-alpine as builder
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /build
-COPY go.mod go.sum ./
+COPY go.mod .
+COPY go.sum .
 RUN go mod download
 COPY . .
 COPY --from=proto /build/pkg/pb pkg/pb

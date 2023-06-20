@@ -20,8 +20,6 @@ type MatchFunctionServer struct {
 	matchfunctiongrpc.UnimplementedMatchFunctionServer
 	MM MatchLogic
 
-	shipCountMin     int
-	shipCountMax     int
 	unmatchedTickets []*matchmaker.Ticket
 }
 
@@ -54,7 +52,6 @@ func (m *MatchFunctionServer) GetStatCodes(ctx context.Context, req *matchfuncti
 
 func (m *MatchFunctionServer) ValidateTicket(ctx context.Context, req *matchfunctiongrpc.ValidateTicketRequest) (*matchfunctiongrpc.ValidateTicketResponse, error) {
 	logrus.Info("SERVER: validate ticket")
-	//return &matchfunctiongrpc.ValidateTicketResponse{ValidTicket: true}, nil
 
 	rules, err := m.MM.RulesFromJSON(req.Rules.Json)
 	if err != nil {
@@ -71,20 +68,7 @@ func (m *MatchFunctionServer) ValidateTicket(ctx context.Context, req *matchfunc
 
 func (m *MatchFunctionServer) EnrichTicket(ctx context.Context, req *matchfunctiongrpc.EnrichTicketRequest) (*matchfunctiongrpc.EnrichTicketResponse, error) {
 	logrus.Info("SERVER: enrich ticket")
-	//// this will enrich ticket with these hardcoded ticket attributes
-	//enrichMap := map[string]*structpb.Value{
-	//	"mmr":        structpb.NewNumberValue(250.0),
-	//	"teamrating": structpb.NewNumberValue(2000.0),
-	//}
-	//
-	//if req.Ticket.TicketAttributes == nil || req.Ticket.TicketAttributes.Fields == nil {
-	//	req.Ticket.TicketAttributes = &structpb.Struct{Fields: enrichMap}
-	//} else {
-	//	for key, value := range enrichMap {
-	//		req.Ticket.TicketAttributes.Fields[key] = value
-	//	}
-	//}
-	//return &matchfunctiongrpc.EnrichTicketResponse{Ticket: req.Ticket}, nil
+
 	matchTicket := matchfunctiongrpc.ProtoTicketToMatchfunctionTicket(req.Ticket)
 	enrichedTicket, err := m.MM.EnrichTicket(matchTicket, req.Rules)
 	if err != nil {
@@ -108,9 +92,6 @@ func (m *MatchFunctionServer) MakeMatches(server matchfunctiongrpc.MatchFunction
 		logrus.Error("not a MakeMatchesRequest_Parameters type")
 		return errors.New("expected parameters in the first message were not met")
 	}
-
-	//scope := envelope.NewRootScope(context.Background(), "GRPC.MakeMatches", mrpT.Parameters.Scope.AbTraceId)
-	//defer scope.Finish()
 
 	rules, err := m.MM.RulesFromJSON(mrpT.Parameters.Rules.Json)
 	if err != nil {
