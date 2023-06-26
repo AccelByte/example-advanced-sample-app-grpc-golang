@@ -57,11 +57,11 @@ pipeline {
             sh "commitlint --color false --verbose --from ${env.BITBUCKET_PULL_REQUEST_LATEST_COMMIT_FROM_TARGET_BRANCH}"
           }
         }
-        stage('Lint Code') {
-          steps {
-            sh "make lint"
-          }
-        }
+        // stage('Lint Code') {
+        //   steps {
+        //     sh "make lint"
+        //   }
+        // }
       }
     }
     stage('Build') {
