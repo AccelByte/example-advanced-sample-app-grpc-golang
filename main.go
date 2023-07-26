@@ -21,22 +21,21 @@ import (
 
 	"github.com/AccelByte/accelbyte-go-sdk/services-api/pkg/factory"
 	"github.com/AccelByte/accelbyte-go-sdk/services-api/pkg/service/iam"
+	sdkAuth "github.com/AccelByte/accelbyte-go-sdk/services-api/pkg/utils/auth"
 	"github.com/AccelByte/accelbyte-go-sdk/services-api/pkg/utils/auth/validator"
+	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/logging"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/sirupsen/logrus"
+	"go.opentelemetry.io/contrib/propagators/b3"
 	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	matchfunctiongrpc "matchmaking-function-grpc-plugin-server-go/pkg/pb"
-
-	sdkAuth "github.com/AccelByte/accelbyte-go-sdk/services-api/pkg/utils/auth"
-	prometheusGrpc "github.com/grpc-ecosystem/go-grpc-prometheus"
-	"github.com/sirupsen/logrus"
-	"go.opentelemetry.io/contrib/propagators/b3"
-
+	promgrpc "github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -45,6 +44,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
 
+	matchfunctiongrpc "matchmaking-function-grpc-plugin-server-go/pkg/pb"
 	"matchmaking-function-grpc-plugin-server-go/pkg/server"
 
 	"google.golang.org/grpc"
@@ -55,66 +55,40 @@ const (
 	id          = 1
 )
 
-var (
-	service  = os.Getenv("OTEL_SERVICE_NAME")
-	gamePort = flag.Int("gamePort", 6565, "The grpc game server port")
-	res      = resource.NewWithAttributes(
-		semconv.SchemaURL,
-		semconv.ServiceNameKey.String(service),
-		attribute.String("environment", environment),
-		attribute.Int64("ID", id),
-	)
-)
-
-func initProvider(ctx context.Context, grpcServer *grpc.Server) (*sdktrace.TracerProvider, error) {
-	// Create Zipkin Exporter and install it as a global tracer.
-	//
-	// For demoing purposes, always sample. In a production application, you should
-	// configure the sampler to a trace.ParentBased(trace.TraceIDRatioBased) set at the desired
-	// ratio.
-	exporter, err := zipkin.New(os.Getenv("OTEL_EXPORTER_ZIPKIN_ENDPOINT"))
-	if err != nil {
-		logrus.Fatalf("failed to call zipkin exporter. %s", err.Error())
-	}
-
-	res = resource.NewWithAttributes(
-		semconv.SchemaURL,
-		semconv.ServiceNameKey.String(os.Getenv("OTEL_SERVICE_NAME")),
-		attribute.String("environment", environment),
-		attribute.Int64("ID", id),
-	)
-
-	// Register the trace exporter with a TracerProvider, using a batch
-	// span processor to aggregate spans before export.
-	tracerProvider := sdktrace.NewTracerProvider(
-		sdktrace.WithSampler(sdktrace.AlwaysSample()),
-		sdktrace.WithResource(res),
-		sdktrace.WithBatcher(exporter, sdktrace.WithBatchTimeout(time.Second*1)),
-	)
-
-	// Shutdown will flush any remaining spans and shut down the exporter.
-	return tracerProvider, nil
-}
+var gamePort = flag.Int("gamePort", 6565, "The grpc game server port")
 
 func main() {
 	go func() {
 		runtime.SetBlockProfileRate(1)
 		runtime.SetMutexProfileFraction(10)
-		_ = http.ListenAndServe(":6060", nil)
 	}()
-	logrus.Printf("pprof served at :6060")
 
 	logrus.Infof("starting app server.")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	opts := []logging.Option{
+		logging.WithLogOnEvents(logging.StartCall, logging.FinishCall, logging.PayloadReceived, logging.PayloadSent),
+		logging.WithFieldsFromContext(func(ctx context.Context) logging.Fields {
+			if span := trace.SpanContextFromContext(ctx); span.IsSampled() {
+				return logging.Fields{"traceID", span.TraceID().String()}
+			}
+
+			return nil
+		}),
+		logging.WithLevels(logging.DefaultClientCodeToLevel),
+		logging.WithDurationField(logging.DurationToDurationField),
+	}
+	srvMetrics := promgrpc.NewServerMetrics()
 	unaryServerInterceptors := []grpc.UnaryServerInterceptor{
 		otelgrpc.UnaryServerInterceptor(),
-		prometheusGrpc.UnaryServerInterceptor,
+		srvMetrics.UnaryServerInterceptor(),
+		logging.UnaryServerInterceptor(interceptorLogger(logrus.New()), opts...),
 	}
 	streamServerInterceptors := []grpc.StreamServerInterceptor{
 		otelgrpc.StreamServerInterceptor(),
-		prometheusGrpc.StreamServerInterceptor,
+		srvMetrics.StreamServerInterceptor(),
+		logging.StreamServerInterceptor(interceptorLogger(logrus.New()), opts...),
 	}
 
 	if strings.ToLower(server.GetEnv("PLUGIN_GRPC_SERVER_AUTH_ENABLED", "false")) == "true" {
@@ -135,38 +109,10 @@ func main() {
 	}
 
 	// Create gRPC Server
-
 	gameServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(unaryServerInterceptors...),
 		grpc.ChainStreamInterceptor(streamServerInterceptors...),
 	)
-
-	// prometheus metrics
-	prometheusGrpc.Register(gameServer)
-	prometheusGrpc.EnableHandlingTimeHistogram()
-
-	// Create non-global registry.
-	registry := prometheus.NewRegistry()
-
-	// Add go runtime metrics and process collectors.
-	registry.MustRegister(
-		prometheusGrpc.DefaultServerMetrics,
-		collectors.NewGoCollector(),
-		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
-	)
-
-	go func() {
-		http.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
-		log.Fatal(http.ListenAndServe(":8080", nil))
-	}()
-	logrus.Printf("prometheus metrics served at :8080/metrics")
-
-	logrus.Infof("listening to grpc port for game: %d", *gamePort)
-	gameLis, err := net.Listen("tcp", fmt.Sprintf(":%d", *gamePort))
-	if err != nil {
-		logrus.Fatalf("failed to listen: %v", err)
-		return
-	}
 
 	//create game matchmaker
 	gameMM := server.NewGameMatchmaker()
@@ -183,8 +129,30 @@ func main() {
 
 	// Enable gRPC Health Check
 	grpc_health_v1.RegisterHealthServer(gameServer, health.NewServer())
-	logrus.Printf("gRPC server listening at %v", gameLis.Addr())
 
+	// Add go runtime metrics and process collectors.
+	srvMetrics.InitializeMetrics(gameServer)
+	promRegistry := prometheus.NewRegistry()
+	promRegistry.MustRegister(
+		srvMetrics,
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+
+	go func() {
+		http.Handle("/metrics", promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{}))
+		log.Fatal(http.ListenAndServe(":8080", nil))
+	}()
+	logrus.Printf("prometheus metrics served at :8080/metrics")
+
+	logrus.Infof("listening to grpc port for game: %d", *gamePort)
+	gameLis, err := net.Listen("tcp", fmt.Sprintf(":%d", *gamePort))
+	if err != nil {
+		logrus.Fatalf("failed to listen: %v", err)
+		return
+	}
+
+	logrus.Printf("gRPC server listening at %v", gameLis.Addr())
 	logrus.Infof("listening...")
 	go func() {
 		if err = gameServer.Serve(gameLis); err != nil {
@@ -193,9 +161,8 @@ func main() {
 		}
 	}()
 
-	//TODO look at this for tracing
-	logrus.Infof("starting init provider.")
-	gameTraceProvider, err := initProvider(ctx, gameServer)
+	logrus.Infof("init tracing provider.")
+	gameTraceProvider, err := getTraceProvider()
 	if err != nil {
 		logrus.Fatalf("failed to initializing the provider. %s", err.Error())
 
@@ -225,4 +192,60 @@ func main() {
 	ctx, _ = signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	<-ctx.Done()
 	fmt.Println("Goodbye...")
+}
+
+func getTraceProvider() (*sdktrace.TracerProvider, error) {
+	// Create Zipkin Exporter and install it as a global tracer.
+	//
+	// For demoing purposes, always sample. In a production application, you should
+	// configure the sampler to a trace.ParentBased(trace.TraceIDRatioBased) set at the desired
+	// ratio.
+	exporter, err := zipkin.New(os.Getenv("OTEL_EXPORTER_ZIPKIN_ENDPOINT"))
+	if err != nil {
+		logrus.Fatalf("failed to call zipkin exporter. %s", err.Error())
+	}
+
+	res := resource.NewWithAttributes(
+		semconv.SchemaURL,
+		semconv.ServiceNameKey.String(os.Getenv("OTEL_SERVICE_NAME")),
+		attribute.String("environment", environment),
+		attribute.Int64("ID", id),
+	)
+
+	// Register the trace exporter with a TracerProvider, using a batch
+	// span processor to aggregate spans before export.
+	tracerProvider := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithResource(res),
+		sdktrace.WithBatcher(exporter, sdktrace.WithBatchTimeout(time.Second*1)),
+	)
+
+	// Shutdown will flush any remaining spans and shut down the exporter.
+	return tracerProvider, nil
+}
+
+// interceptorLogger adapts logrus logger to interceptor logger
+func interceptorLogger(l logrus.FieldLogger) logging.Logger {
+	return logging.LoggerFunc(func(_ context.Context, lvl logging.Level, msg string, fields ...any) {
+		f := make(map[string]any, len(fields)/2)
+		i := logging.Fields(fields).Iterator()
+		if i.Next() {
+			k, v := i.At()
+			f[k] = v
+		}
+		l = l.WithFields(f)
+
+		switch lvl {
+		case logging.LevelDebug:
+			l.Debug(msg)
+		case logging.LevelInfo:
+			l.Info(msg)
+		case logging.LevelWarn:
+			l.Warn(msg)
+		case logging.LevelError:
+			l.Error(msg)
+		default:
+			panic(fmt.Sprintf("unknown level %v", lvl))
+		}
+	})
 }
