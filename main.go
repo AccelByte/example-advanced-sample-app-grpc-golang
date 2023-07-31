@@ -240,8 +240,7 @@ func interceptorLogger(logger logrus.FieldLogger) logging.Logger {
 		logrusFields := make(map[string]any, len(fields))
 		iterator := logging.Fields(fields).Iterator()
 		for iterator.Next() {
-			k, fieldValue := iterator.At()
-			fieldName := strings.ReplaceAll(k, ".", "_")
+			fieldName, fieldValue := iterator.At()
 			logrusFields[fieldName] = fieldValue
 		}
 		logger = logger.WithFields(logrusFields)
