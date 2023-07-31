@@ -55,7 +55,10 @@ const (
 	id          = 1
 )
 
-var gamePort = flag.Int("gamePort", 6565, "The grpc game server port")
+var (
+	gamePort    = flag.Int("gamePort", 6565, "The grpc game server port")
+	logLevelStr = server.GetEnv("LOG_LEVEL", logrus.InfoLevel.String())
+)
 
 func main() {
 	go func() {
@@ -67,7 +70,14 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	opts := []logging.Option{
+	logrusLevel, err := logrus.ParseLevel(logLevelStr)
+	if err != nil {
+		logrusLevel = logrus.InfoLevel
+	}
+	logrusLogger := logrus.New()
+	logrusLogger.SetLevel(logrusLevel)
+
+	loggingOptions := []logging.Option{
 		logging.WithLogOnEvents(logging.StartCall, logging.FinishCall, logging.PayloadReceived, logging.PayloadSent),
 		logging.WithFieldsFromContext(func(ctx context.Context) logging.Fields {
 			if span := trace.SpanContextFromContext(ctx); span.IsSampled() {
@@ -83,12 +93,12 @@ func main() {
 	unaryServerInterceptors := []grpc.UnaryServerInterceptor{
 		otelgrpc.UnaryServerInterceptor(),
 		srvMetrics.UnaryServerInterceptor(),
-		logging.UnaryServerInterceptor(interceptorLogger(logrus.New()), opts...),
+		logging.UnaryServerInterceptor(interceptorLogger(logrusLogger), loggingOptions...),
 	}
 	streamServerInterceptors := []grpc.StreamServerInterceptor{
 		otelgrpc.StreamServerInterceptor(),
 		srvMetrics.StreamServerInterceptor(),
-		logging.StreamServerInterceptor(interceptorLogger(logrus.New()), opts...),
+		logging.StreamServerInterceptor(interceptorLogger(logrusLogger), loggingOptions...),
 	}
 
 	if strings.ToLower(server.GetEnv("PLUGIN_GRPC_SERVER_AUTH_ENABLED", "false")) == "true" {
@@ -225,25 +235,26 @@ func getTraceProvider() (*sdktrace.TracerProvider, error) {
 }
 
 // interceptorLogger adapts logrus logger to interceptor logger
-func interceptorLogger(l logrus.FieldLogger) logging.Logger {
+func interceptorLogger(logger logrus.FieldLogger) logging.Logger {
 	return logging.LoggerFunc(func(_ context.Context, lvl logging.Level, msg string, fields ...any) {
-		f := make(map[string]any, len(fields)/2)
-		i := logging.Fields(fields).Iterator()
-		if i.Next() {
-			k, v := i.At()
-			f[k] = v
+		logrusFields := make(map[string]any, len(fields))
+		iterator := logging.Fields(fields).Iterator()
+		for iterator.Next() {
+			k, fieldValue := iterator.At()
+			fieldName := strings.ReplaceAll(k, ".", "_")
+			logrusFields[fieldName] = fieldValue
 		}
-		l = l.WithFields(f)
+		logger = logger.WithFields(logrusFields)
 
 		switch lvl {
 		case logging.LevelDebug:
-			l.Debug(msg)
+			logger.Debug(msg)
 		case logging.LevelInfo:
-			l.Info(msg)
+			logger.Info(msg)
 		case logging.LevelWarn:
-			l.Warn(msg)
+			logger.Warn(msg)
 		case logging.LevelError:
-			l.Error(msg)
+			logger.Error(msg)
 		default:
 			panic(fmt.Sprintf("unknown level %v", lvl))
 		}
