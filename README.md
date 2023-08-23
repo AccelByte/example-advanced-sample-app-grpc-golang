@@ -66,17 +66,27 @@ in [grpc-plugin-dependencies](https://github.com/AccelByte/grpc-plugin-dependenc
 
 ## Setup
 
-Create a docker compose `.env` file based on `.env.template` file and fill in the required environment variables in `.env` file.
+To be able to run this sample app, you will need to follow these setup steps.
+
+1. Create a docker compose `.env` file by copying the content of [.env.template](.env.template) file.
+
+   > :warning: **The host OS environment variables have higher precedence compared to `.env` file variables**: If the variables in `.env` file do not seem to take effect properly, check if there are host OS environment variables with the same name. 
+   See documentation about [docker compose environment variables precedence](https://docs.docker.com/compose/environment-variables/envvars-precedence/) for more details.
+
+2. Fill in the required environment variables in `.env` file as shown below.
 
    ```
    AB_BASE_URL=https://demo.accelbyte.io      # Base URL of AccelByte Gaming Services demo environment
-   AB_CLIENT_ID='xxxxxxxxxx'                  # Client ID from the Prerequisites section
-   AB_CLIENT_SECRET='xxxxxxxxxx'              # Client Secret from the Prerequisites section
+   AB_CLIENT_ID='xxxxxxxxxx'         # Client ID from the Prerequisites section
+   AB_CLIENT_SECRET='xxxxxxxxxx'     # Client Secret from the Prerequisites section
    AB_NAMESPACE='xxxxxxxxxx'                  # Namespace ID from the Prerequisites section
    PLUGIN_GRPC_SERVER_AUTH_ENABLED=false      # Enable or disable access token and permission verification
    ```
 
-> :exclamation: **For the gRPC server and the gRPC client**: Use the same Base URL, Client ID, Client Secret, and Namespace ID.
+   > :warning: **Keep PLUGIN_GRPC_SERVER_AUTH_ENABLED=false for now**: It is currently not
+   supported by `AccelByte Gaming Services`, but it will be enabled later on to improve security. If it is
+   enabled, the gRPC server will reject any calls from gRPC clients without proper authorization
+   metadata.
 
 ## Building
 
