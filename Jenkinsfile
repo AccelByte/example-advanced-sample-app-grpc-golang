@@ -15,12 +15,11 @@ bitbucketPayload = null
 bitbucketCommitHref = null
 
 pipeline {
-  agent none
+  agent {
+    label "justice-codegen-sdk"
+  }
   stages {
     stage('Prepare') {
-      agent {
-        label "master"
-      }
       steps {
         script {
           if (env.BITBUCKET_PAYLOAD) {
@@ -36,9 +35,6 @@ pipeline {
       }
     }
     stage('Lint') {
-      agent {
-        label "justice-codegen-sdk"
-      }
       stages {
         stage('Lint Commits') {
           when {
@@ -65,17 +61,11 @@ pipeline {
       }
     }
     stage('Build') {
-      agent {
-        label "justice-codegen-sdk"
-      }
       steps {
         sh "make build"
       }
     }
     stage('Test') {
-      agent {
-        label "justice-codegen-sdk"
-      }
       steps {
         sh "make test"
       }
