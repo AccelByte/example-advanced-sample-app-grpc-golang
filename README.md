@@ -56,7 +56,7 @@ in [grpc-plugin-dependencies](https://github.com/AccelByte/grpc-plugin-dependenc
 
 2. Access to `AccelByte Gaming Services` demo environment.
 
-   a. Base URL: https://demo.accelbyte.io
+   a. Base URL: https://test.accelbyte.io
 
    b. [Create a Game Namespace](https://docs.accelbyte.io/esg/uam/namespaces.html#tutorials) if you don't have one yet. Keep the `Namespace ID`.
 
@@ -76,7 +76,7 @@ To be able to run this sample app, you will need to follow these setup steps.
 2. Fill in the required environment variables in `.env` file as shown below.
 
    ```
-   AB_BASE_URL=https://demo.accelbyte.io      # Base URL of AccelByte Gaming Services demo environment
+   AB_BASE_URL=https://test.accelbyte.io      # Base URL of AccelByte Gaming Services demo environment
    AB_CLIENT_ID='xxxxxxxxxx'         # Client ID from the Prerequisites section
    AB_CLIENT_SECRET='xxxxxxxxxx'     # Client Secret from the Prerequisites section
    AB_NAMESPACE='xxxxxxxxxx'                  # Namespace ID from the Prerequisites section
